@@ -24,6 +24,11 @@ typedef struct {
     int sujeira_total;
 } Mapa;
 
+/* ===== VARIÁVEIS GLOBAIS PARA DETECÇÃO DE LOOP ===== */
+static int passos_sem_limpar = 0;
+static Ponto historico_posicoes[50];
+static int idx_historico = 0;
+
 /* ===== I/O auxiliar ===== */
 static void flush_stdin(void){
     int ch;
@@ -59,6 +64,22 @@ static int eh_bloqueio(const Mapa* M, int r, int c){
     return !dentro(M,r,c) || M->g[r][c]=='#';
 }
 
+/* ===== DETECÇÃO DE LOOP ===== */
+static int posicao_repetida_recentemente(Ponto pos) {
+    for (int i = 0; i < (idx_historico < 10 ? idx_historico : 10); i++) {
+        int idx = (idx_historico - 1 - i + 50) % 50;
+        if (historico_posicoes[idx].r == pos.r && historico_posicoes[idx].c == pos.c) {
+            return 1; // encontrou posição repetida nos últimos 10 passos
+        }
+    }
+    return 0;
+}
+
+static void adicionar_posicao_historico(Ponto pos) {
+    historico_posicoes[idx_historico % 50] = pos;
+    idx_historico++;
+}
+
 static const char* nome_acao(Acao a){
     switch(a){
         case LIMPAR: return "LIMPAR";
@@ -81,19 +102,15 @@ static void imprimir_mapa(const Mapa* M, Ponto pos){
     }
 }
 
-/* ===== Política do agente reflex com explicação =====
-   Regras:
-   1) Se a célula atual é suja -> LIMPAR
-   2) Se existe vizinho sujo (N,S,L,O) -> mover até ele
-   3) Caso contrário -> varredura zig-zag por colunas
-   4) Fallback simples
-*/
+/* ===== Política do agente reflex MELHORADA ===== */
 static Acao decide_reflex(const Mapa* M, Ponto pos, char* motivo, size_t motivo_len){
+    // Regra 1: Se a célula atual é suja -> LIMPAR
     if (M->g[pos.r][pos.c]=='*'){
         snprintf(motivo, motivo_len, "Regra 1: célula atual suja -> LIMPAR.");
         return LIMPAR;
     }
 
+    // Regra 2: Se existe vizinho sujo -> mover até ele
     if (eh_sujo(M,pos.r-1,pos.c)){
         snprintf(motivo, motivo_len, "Regra 2: vizinho sujo ao norte -> mover para N.");
         return MOVER_N;
@@ -111,6 +128,28 @@ static Acao decide_reflex(const Mapa* M, Ponto pos, char* motivo, size_t motivo_
         return MOVER_O;
     }
 
+    // ESTRATÉGIA ANTI-LOOP: Se muitos passos sem limpeza, muda comportamento
+    if (passos_sem_limpar > 30) {
+        // Tenta exploração aleatória/diferente
+        if (!eh_bloqueio(M,pos.r-1,pos.c) && !posicao_repetida_recentemente((Ponto){pos.r-1, pos.c})){
+            snprintf(motivo, motivo_len, "Anti-loop: exploracao norte.");
+            return MOVER_N;
+        }
+        if (!eh_bloqueio(M,pos.r,pos.c+1) && !posicao_repetida_recentemente((Ponto){pos.r, pos.c+1})){
+            snprintf(motivo, motivo_len, "Anti-loop: exploracao leste.");
+            return MOVER_O;
+        }
+        if (!eh_bloqueio(M,pos.r+1,pos.c) && !posicao_repetida_recentemente((Ponto){pos.r+1, pos.c})){
+            snprintf(motivo, motivo_len, "Anti-loop: exploracao sul.");
+            return MOVER_S;
+        }
+        if (!eh_bloqueio(M,pos.r,pos.c-1) && !posicao_repetida_recentemente((Ponto){pos.r, pos.c-1})){
+            snprintf(motivo, motivo_len, "Anti-loop: exploracao oeste.");
+            return MOVER_L;
+        }
+    }
+
+    // Regra 3: Varredura zig-zag (original)
     if (pos.c % 2 == 0){
         if (!eh_bloqueio(M,pos.r,pos.c+1)){
             snprintf(motivo, motivo_len, "Regra 3 (zig-zag): coluna par -> tentar leste.");
@@ -124,7 +163,7 @@ static Acao decide_reflex(const Mapa* M, Ponto pos, char* motivo, size_t motivo_
         }
     } else {
         if (!eh_bloqueio(M,pos.r,pos.c-1)){
-            snprintf(motivo, motivo_len, "Regra 3 (zig-zag): coluna ímpar -> tentar oeste.");
+            snprintf(motivo, motivo_len, "Regra 3 (zig-zag): coluna impar -> tentar oeste.");
             return MOVER_L;
         } else if (!eh_bloqueio(M,pos.r+1,pos.c)){
             snprintf(motivo, motivo_len, "Regra 3 (zig-zag): oeste bloqueado -> descer.");
@@ -135,6 +174,7 @@ static Acao decide_reflex(const Mapa* M, Ponto pos, char* motivo, size_t motivo_
         }
     }
 
+    // Fallback melhorado
     if (!eh_bloqueio(M,pos.r-1,pos.c)){
         snprintf(motivo, motivo_len, "Fallback: subir (norte).");
         return MOVER_N;
@@ -155,6 +195,7 @@ static int aplicar_acao(Mapa* M, Ponto* pos, Acao a, int* limpezas, int* bloquei
                 M->g[nr][nc]='.';
                 (*limpezas)++;
                 if (M->sujeira_total > 0) M->sujeira_total--;
+                passos_sem_limpar = 0; // RESET contador ao limpar
             }
             return 1;
         case MOVER_N: nr--; break;
@@ -163,8 +204,17 @@ static int aplicar_acao(Mapa* M, Ponto* pos, Acao a, int* limpezas, int* bloquei
         case MOVER_O: nc++; break;
         case FICAR:   return 1;
     }
-    if (eh_bloqueio(M,nr,nc)){ (*bloqueios)++; return 0; }
-    pos->r = nr; pos->c = nc; return 1;
+    if (eh_bloqueio(M,nr,nc)){ 
+        (*bloqueios)++; 
+        passos_sem_limpar++; // incrementa se bloqueado
+        return 0; 
+    }
+    
+    // Movimento bem-sucedido
+    pos->r = nr; pos->c = nc; 
+    adicionar_posicao_historico(*pos);
+    passos_sem_limpar++; // incrementa (será resetado se limpar)
+    return 1;
 }
 
 /* ===== Validação de linha de mapa ===== */
@@ -179,14 +229,20 @@ static int linha_valida(const char* s, int M){
 
 /* ===== Main (interativo) ===== */
 int main(void){
-    printf("=== Robo Aspirador (Agente Reflex) ===\n");
+    printf("=== Robo Aspirador (Agente Reflex MELHORADO) ===\n");
+    printf("MELHORIAS:\n");
+    printf("- Deteccao de loop por falta de progresso (>100 passos sem limpeza)\n");
+    printf("- Deteccao de ciclo de posicoes\n");
+    printf("- Estrategia anti-loop quando preso\n");
+    printf("- Limite maximo de 500 passos de seguranca\n\n");
+    
     printf("Instrucoes:\n");
     printf("1) Informe N (linhas), M (colunas) e T (passos maximos).\n");
     printf("2) Em seguida, informe cada uma das N linhas do mapa com %s caracteres:\n", "M");
     printf("   . = vazio limpo   * = sujeira   # = obstaculo   S = inicio do robo\n");
     printf("Exemplo:\n");
-    printf("6 8 150\n");
-    printf("S....#..\n.##..*..\n..*..#..\n..##..*.\n...!*...\n..*..#..\n\n");
+    printf("5 7 80\n");
+    printf("S..*..#\n..#..*..\n..#....\n..*..#.\n.......\n\n");
 
     Mapa M; M.g = NULL; M.sujeira_total = 0;
     printf("Digite N M T: ");
@@ -259,6 +315,10 @@ int main(void){
     Ponto pos = M.S;
     Log L; log_init(&L, 64);
     int limpezas=0, bloqueios=0, passos=0;
+    
+    // RESET variáveis globais
+    passos_sem_limpar = 0;
+    idx_historico = 0;
 
     if (passo){
         printf("\nLegenda: . limpo   * sujo   # obstaculo   R robo\n");
@@ -268,8 +328,21 @@ int main(void){
     }
 
     clock_t t0 = clock();
-    for (int t=0; t<M.T; t++){
-        if (M.sujeira_total==0) break;
+    
+    // LIMITE DE SEGURANÇA: máximo 500 passos ou T (o que for menor)
+    int limite_seguranca = (M.T > 500) ? 500 : M.T;
+    
+    for (int t=0; t<limite_seguranca; t++){
+        // Condições de parada
+        if (M.sujeira_total==0) {
+            printf("Sucesso! Toda sujeira foi removida.\n");
+            break;
+        }
+        
+        if (passos_sem_limpar > 100) {
+            printf("Parou por falta de progresso (>100 passos sem limpeza).\n");
+            break;
+        }
 
         char motivo[128];
         Acao a = decide_reflex(&M, pos, motivo, sizeof(motivo));
@@ -280,6 +353,7 @@ int main(void){
         if (passo){
             printf("\nPasso %d | Acao: %s | %s | %s\n",
                    passos, nome_acao(a), motivo, ok? "ok" : "bloqueado");
+            printf("Passos sem limpeza: %d\n", passos_sem_limpar);
             imprimir_mapa(&M, pos);
             printf("Sujeira restante: %d | Limpezas: %d | Tentativas bloqueadas: %d\n",
                    M.sujeira_total, limpezas, bloqueios);
@@ -290,13 +364,22 @@ int main(void){
     double cpu = (double)(t1 - t0) / CLOCKS_PER_SEC;
 
     printf("\n=== Resultado da simulacao ===\n");
-    printf("Passos executados: %d (limite T=%d)\n", passos, M.T);
+    printf("Passos executados: %d (limite T=%d, seguranca=%d)\n", passos, M.T, limite_seguranca);
     printf("Limpezas realizadas: %d\n", limpezas);
     printf("Tentativas bloqueadas: %d\n", bloqueios);
+    printf("Passos sem limpeza no final: %d\n", passos_sem_limpar);
     printf("Sujeira inicial=%d | restante=%d | removida=%.1f%%\n",
            sujeira_inicial, M.sujeira_total,
            sujeira_inicial ? 100.0*(sujeira_inicial - M.sujeira_total)/sujeira_inicial : 100.0);
     printf("Tempo de CPU: %.6fs\n", cpu);
+
+    // Diagnóstico adicional
+    if (M.sujeira_total > 0 && passos_sem_limpar > 100) {
+        printf("\n=== DIAGNOSTICO ===\n");
+        printf("PROBLEMA: Robo ficou preso em loop!\n");
+        printf("CAUSA PROVAVEL: Sujeira inacessivel ou estrategia inadequada.\n");
+        printf("SUGESTAO: Verifique se ha sujeira cercada por obstaculos.\n");
+    }
 
     printf("\nDeseja ver o mapa final? (1=sim, 0=nao): ");
     int ver_final=0; if (scanf("%d", &ver_final)!=1) ver_final=0;
