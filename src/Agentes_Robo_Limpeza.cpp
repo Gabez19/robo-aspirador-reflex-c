@@ -19,8 +19,8 @@ typedef enum { LIMPAR=0, MOVER_N, MOVER_S, MOVER_L, MOVER_O, FICAR } Acao;
 typedef struct { Acao *v; int cap, ini, sz; } Log;
 typedef struct {
     int N, M, T;
-    char **g;     /* grade: '.' '*' '#' ; 'S' é lido e convertido para '.' */
-    Ponto S;      /* posição inicial */
+    char **g;     /* grade: '.' '*' '#' ; 'S' Ã© lido e convertido para '.' */
+    Ponto S;      /* posiÃ§Ã£o inicial */
     int sujeira_total;
 } Mapa;
 
@@ -81,16 +81,16 @@ static void imprimir_mapa(const Mapa* M, Ponto pos){
     }
 }
 
-/* ===== Política do agente reflex com explicação =====
+/* ===== PolÃ­tica do agente reflex com explicaÃ§Ã£o =====
    Regras:
-   1) Se a célula atual é suja -> LIMPAR
-   2) Se existe vizinho sujo (N,S,L,O) -> mover até ele
-   3) Caso contrário -> varredura zig-zag por colunas
+   1) Se a cÃ©lula atual Ã© suja -> LIMPAR
+   2) Se existe vizinho sujo (N,S,L,O) -> mover atÃ© ele
+   3) Caso contrÃ¡rio -> varredura zig-zag por colunas
    4) Fallback simples
 */
 static Acao decide_reflex(const Mapa* M, Ponto pos, char* motivo, size_t motivo_len){
     if (M->g[pos.r][pos.c]=='*'){
-        snprintf(motivo, motivo_len, "Regra 1: célula atual suja -> LIMPAR.");
+        snprintf(motivo, motivo_len, "Regra 1: cÃ©lula atual suja -> LIMPAR.");
         return LIMPAR;
     }
 
@@ -124,7 +124,7 @@ static Acao decide_reflex(const Mapa* M, Ponto pos, char* motivo, size_t motivo_
         }
     } else {
         if (!eh_bloqueio(M,pos.r,pos.c-1)){
-            snprintf(motivo, motivo_len, "Regra 3 (zig-zag): coluna ímpar -> tentar oeste.");
+            snprintf(motivo, motivo_len, "Regra 3 (zig-zag): coluna Ã­mpar -> tentar oeste.");
             return MOVER_L;
         } else if (!eh_bloqueio(M,pos.r+1,pos.c)){
             snprintf(motivo, motivo_len, "Regra 3 (zig-zag): oeste bloqueado -> descer.");
@@ -167,7 +167,7 @@ static int aplicar_acao(Mapa* M, Ponto* pos, Acao a, int* limpezas, int* bloquei
     pos->r = nr; pos->c = nc; return 1;
 }
 
-/* ===== Validação de linha de mapa ===== */
+/* ===== ValidaÃ§Ã£o de linha de mapa ===== */
 static int linha_valida(const char* s, int M){
     if ((int)strlen(s) != M) return 0;
     for (int j=0;j<M;j++){
@@ -310,5 +310,3 @@ int main(void){
     FREE(L.v);
     return 0;
 }
-
-
